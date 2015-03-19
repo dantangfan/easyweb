@@ -233,4 +233,16 @@ else:
 class HTTPHeaders(dict):
     def __init__(self, *args, **kwargs):
         super(HTTPHeaders, self).__init__()
-        
+        self._as_list = {}
+        self._last_key = None
+        if len(args)==1 and len(kwargs)==0 and isinstance(args[0], HTTPHeaders):
+            for k, v in args[0].get_all():
+                self.add(k, v)
+        else:
+            self.update(*args, **kwargs)
+
+    def add(self, name, value):
+        normal_name = HTTPHeaders._normalize_name(name)
+        self._last_key = normal_name
+        if normal_name in self:
+           pass
