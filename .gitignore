@@ -1,0 +1,9 @@
+*.pyc
+1.py
+~*
+test/
+.idea/
+nohup
+nohup.out
+*.log
+acmjudger/problems/
