@@ -431,7 +431,7 @@ class Request(object):
 
 
 class Response(object):
-    def __init__(self, output, status="200 OK"):
+    def __init__(self, output="", status="200 OK"):
         """
         :param output:
         :param status:
@@ -443,7 +443,6 @@ class Response(object):
 
     @property
     def headers(self):
-        #print self.headers
         L = [(_RESPONSE_HEADER_DICT.get(k, k), v) for k, v in self._headers.iteritems()]
         if hasattr(self, '_cookies'):
             for v in self._cookies.itervalues():
@@ -490,7 +489,7 @@ class Response(object):
         self.set_header('CONTENT-LENGTH', str(value))
 
     def delete_cookie(self, name):
-        self.set_cookie(name , '__deleted__', expires=0)
+        self.set_cookie(name, '__deleted__', expires=0)
 
     def set_cookie(self, name, value, max_age=None, expires=None, path="", domain=None, secure=False, http_only=True):
         if not hasattr(self, '_cookies'):
@@ -511,6 +510,18 @@ class Response(object):
         if hasattr(self, '_cookies'):
             if name in self._cookies:
                 del self._cookies
+
+    def clear_all_cookies(self):
+        if hasattr(self, '_cookies'):
+            for name in self._cookies:
+                print name
+                self.delete_cookie(name)
+
+    @property
+    def cookies(self):
+        if hasattr(self, '_cookies'):
+            return self._cookies
+        return {}
 
     @property
     def status_code(self):

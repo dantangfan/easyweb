@@ -10,8 +10,7 @@ except Exception, e:
 
 @get('/')
 def index(request):
-    return 'hello world !'
-
+    return "get foo: %s" % request.get('foo',"nothing")
 
 
 
