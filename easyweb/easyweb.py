@@ -4,21 +4,10 @@
 
 import re
 import cgi
-import Cookie
 import sys
 import os
 import urllib
-import string
-import base64
-import logging
 import traceback
-import time
-import datetime
-import threading
-import mimetypes
-
-
-ctx = threading.local()
 
 
 _RESPONSE_STATUSES = {
@@ -126,6 +115,14 @@ _RESPONSE_HEADERS = (
 _RESPONSE_HEADER_DICT = dict(zip(map(lambda x: x.upper(), _RESPONSE_HEADERS), _RESPONSE_HEADERS))
 
 _HEADER_X_POWER_BY = ('X-Powered-by', 'easyweb/1.0')
+
+
+REQUEST_MAPPINGS = {
+    'GET': [],
+    'POST': [],
+}
+
+MEDIA_ROOT = os.path.join(os.path.dirname(__file__), 'media')
 
 
 class HTTPError(Exception):
@@ -269,118 +266,26 @@ def _unquote(src, encoding="utf-8"):
     return urllib.unquote(src).decode(encoding)
 
 
-def get(path):
+def get(url):
     """
     decorator for get method
     """
     def _decorator(func):
-        func.__web_route__ = path
-        func.__web_method__ = "GET"
+        re_url = re.compile("^%s$" % add_slash(url))
+        REQUEST_MAPPINGS['GET'].append((re_url, url, func))
         return func
     return _decorator
 
 
-def post(path):
+def post(url):
     """
     decorator for post method
     """
     def _decorator(func):
-        func.__web_route__ = path
-        func.__web_method__ = "POST"
+        re_url = re.compile("^%s$" % add_slash(url))
+        REQUEST_MAPPINGS['POST'].append((re_url, url, func))
         return func
     return _decorator
-
-
-_re_route = re.compile(r'(\:[a-zA-Z_]\w*)')
-
-
-def _build_regex(path):
-    """
-    cover path to regex to match url from request
-    :param path:
-    :return:
-    """
-    re_list = ['^']
-    var_list = []
-    is_var = False
-    for v in _re_route.split(path):
-        if is_var:
-            var_name = v[1:]
-            var_list.append(var_name)
-            re_list.append(r'(?P<%s>[^\/]+)' % var_name)
-        else:
-            s = ''
-            for ch in v:
-                if ch in string.digits or ch in string.letters:
-                    s += ch
-                else:
-                    s = s + '\\' + ch
-            re_list.append(s)
-        is_var = not is_var
-    re_list.append('$')
-    return ''.join(re_list)
-
-
-class Route(object):
-    """
-    a route object is a callable object
-    """
-    def __init__(self, func):
-        self.path = func.__web_route__
-        self.method = func.__web_method__
-        self.is_static = _re_route.search(self.path) is None
-        if not self.is_static:
-            self.route = re.compile(_build_regex(self.path))
-        self.func = func
-
-    def match(self, url):
-        m = self.route.match(url)
-        if m:
-            return m.groups()
-        return None
-
-    def __call__(self, *args, **kwargs):
-        return self.func(*args)
-
-    def __str__(self):
-        if self.is_static:
-            return "Route(static,%s,path=%s)" % (self.method, self.path)
-        return "Route(dynamic,%s,path=%s)" % (self.method, self.path)
-
-    __repr__ = __str__
-
-
-def _static_file_generator(fpath):
-    BLOCK_SIZE = 8192
-    with open(fpath, 'rb') as f:
-        block = f.read(BLOCK_SIZE)
-        while block:
-            yield block
-            block = f.read(BLOCK_SIZE)
-
-
-class StaticFileRoute(object):
-    def __init__(self):
-        self.method = "GET"
-        self.is_static = False
-        self.route = re.compile("^/static/(.+)$")
-
-    def match(self, url):
-        if url.startswith('/static/'):
-            return (url[1:],)
-        return None
-
-    def __call__(self, *args, **kwargs):
-        fpath = os.path.join(ctx.application.document_root, args[0])
-        if not os.path.isfile(fpath):
-            return notfound()
-        fext = os.path.splitext(fpath)[1]
-        ctx.response.content_type = mimetypes.types_map.get(fext.lower(), 'application/octet-stream')
-        return _static_file_generator(fpath)
-
-
-def favicon_handler():
-    return _static_file_generator('/favicon.ico')
 
 
 class MultipartFile(object):
@@ -476,11 +381,12 @@ class Request(object):
 
     @property
     def request_method(self):
-        return self._environ.get("REQUEST_METHOD", "")
+        return self._environ.get("REQUEST_METHOD", "GET")
 
     @property
     def path_info(self):
-        urllib.unquote(self._environ.get("PATH_INFO", ""))
+        path = urllib.unquote(self._environ.get("PATH_INFO", ""))
+        return add_slash(path)
 
     @property
     def host(self):
@@ -522,13 +428,17 @@ class Request(object):
         return self._get_cookies().get(name, default)
 
 
-
-
-
 class Response(object):
-    def __init__(self):
-        self._status = '200 OK'
-        self._headers = {"CONTENT-TYPE": 'text/html; charset=utf-8'}
+    def __init__(self, output, headers={"CONTENT-TYPE": "text/html; charset=utf-8"}, status="200 OK"):
+        """
+        :param output:
+        :param headers: should be a dict
+        :param status:
+        :return:
+        """
+        self._status = status
+        self._headers = headers
+        self._output = output
 
     @property
     def headers(self):
@@ -584,9 +494,6 @@ class Response(object):
         if not hasattr(self, '_cookies'):
             self._cookies = {}
         L = ["%s=%s" % (_quote(name), _quote(value))]
-        #if expires is not None:
-        #    if isinstance(expires, (int, long, float)):
-        #        L.append('Expires=%s' % datetime.datetime.fromtimestamp(expires, UTC_0).strftime('%a, %d-%b-%Y %H:%M:%S GMT'))
         if isinstance(max_age, (int, long)):
             L.append('Max-Age=%s' % max_age)
         L.append('Path=%s' % path)
@@ -631,48 +538,65 @@ class Response(object):
         else:
             raise TypeError("Bad type of response code")
 
+    def send(self, start_response):
+        start_response(self._status, self._headers)
+        if isinstance(self._output, unicode):
+            return self._output.encode("utf-8")
+        return self._output
+
 
 def add_slash(url):
     if not url.endswith('/'):
         url += '/'
     return url
 
-"""
-class WSGIApplication(object):
-    def __init__(self, document_root=None, **kwargs):
-        self._running = False
-        self._document_root = document_root
-        self._interpreters = []
-
-        self._get_static = {}
-        self._post_static = {}
-        self._get_dynamic = []
-        self._post_dynamic = []
-
-    def _check_not_running(self):
-        if self._running:
-            raise RuntimeError("Application is running")
-
-    def add_url(self, func):
-        self._check_not_running()
-        route = Route(func)
-        if route.is_static:
-            if route.method == "GET":
-                self._get_static[route.path] = route
-            if route.method == "POST":
-                self._post_static[route.path] = route
-        else:
-            if route.method == "GET":
-                self._get_dynamic.append(route)
-            if route.method == "POST":
-                self._post_dynamic.append(route)
-        logging.info('Add route: %s ' % str(route))
+def find_matching_url(request):
+    if not request.request_method in REQUEST_MAPPINGS:
+        raise seemore("The HTTP request method '%s' is not supported." % request.request_method)
+    for url_set in REQUEST_MAPPINGS[request.request_method]:
+        match = url_set[0].search(request.path_info)
+        if match is not None:
+            return (url_set, match.groupdict())
+    raise seemore("Sorry, nothing here")
 
 
+def handler_request(environ, start_response):
+    try:
+        request = Request(environ=environ, start_response=start_response)
+    except Exception, e:
+        return handler_error(e)
+    try:
+        (re_url, url, callback), kwargs = find_matching_url(request)
+        response = callback(request, **kwargs)
+    except Exception, e:
+        return handler_request(e, request)
+    if not isinstance(response, Response):
+        response = Response(response)
+    return response.send(start_response)
 
-    def run(self, host='127.0.0.1', port=8888):
-        from wsgiref.simple_server import make_server
-        logging.info("application %s will start at %s:%s" % (self._document_root, host, port))
-        server = make_server(host, port, self.get_wsgi_application(debug=True))
-        server.serve_forever()
-"""
+
+def handler_error(exception, request=None):
+    if request is None:
+        request = {'_environ': {'PATH_INFO': ''}}
+    if not getattr(exception, 'hide_traceback', False):
+        (e_type, e_value, e_tb) = sys.exc_info()
+        message = "%s occured on '%s' \n Traceback: %s" % (
+            exception.__class__,
+            request._environ['PATH_INFO'],
+            exception,
+            ''.join(traceback.format_exception(e_type, e_value, e_tb))
+        )
+        request._environ['wsgi.input'].write(message)
+    status = ""
+    if isinstance(exception, HTTPError):
+        status = getattr(exception, 'status', '404 Not Found')
+        if status[:3] == '404':
+            return notfound()
+    return seemore(status)
+    # todo add error mapping
+
+
+def wsgiref_adapter(host="127.0.0.1", port=8888):
+    from wsgiref.simple_server import make_server
+    srv = make_server(host, port, handler_request)
+    srv.serve_forever()
