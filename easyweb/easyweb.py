@@ -114,7 +114,7 @@ _RESPONSE_HEADERS = (
 
 _RESPONSE_HEADER_DICT = dict(zip(map(lambda x: x.upper(), _RESPONSE_HEADERS), _RESPONSE_HEADERS))
 
-_HEADER_X_POWER_BY = ('X-Powered-by', 'easyweb/1.0')
+_HEADER_X_POWER_BY = ('X-Powered-by', 'easyweb/0.1')
 
 
 REQUEST_MAPPINGS = {
@@ -128,7 +128,7 @@ MEDIA_ROOT = os.path.join(os.path.dirname(__file__), 'media')
 class HTTPError(Exception):
     def __init__(self, code):
         super(HTTPError, self).__init__()
-        self.status = "%s %s" % (code, _RE_RESPONSE_STATUS[code])
+        self.status = "%s %s" % (code, _RESPONSE_STATUSES[code])
 
     def header(self, name, value):
         if not hasattr(self, "_headers"):
@@ -169,11 +169,11 @@ def unauthorized():
 
 
 def forbidden():
-    return HTTPError(403)
+    return str(HTTPError(403))
 
 
 def notfound():
-    return HTTPError(404)
+    return str(HTTPError(404))
 
 
 def conflict():
@@ -185,7 +185,7 @@ def internalerror():
 
 
 def redirect(location):
-    return RedirectError(301, location)
+    return str(RedirectError(301, location))
 
 
 def found(location):
@@ -193,7 +193,7 @@ def found(location):
 
 
 def seemore(location):
-    return RedirectError(303, location)
+    return str(RedirectError(303, location))
 
 
 if type('') is type(b''):
@@ -269,6 +269,7 @@ def _unquote(src, encoding="utf-8"):
 def get(url):
     """
     decorator for get method
+    register
     """
     def _decorator(func):
         re_url = re.compile("^%s$" % add_slash(url))
@@ -280,6 +281,7 @@ def get(url):
 def post(url):
     """
     decorator for post method
+    register
     """
     def _decorator(func):
         re_url = re.compile("^%s$" % add_slash(url))
@@ -429,19 +431,19 @@ class Request(object):
 
 
 class Response(object):
-    def __init__(self, output, headers={"CONTENT-TYPE": "text/html; charset=utf-8"}, status="200 OK"):
+    def __init__(self, output, status="200 OK"):
         """
         :param output:
-        :param headers: should be a dict
         :param status:
         :return:
         """
         self._status = status
-        self._headers = headers
+        self._headers = {'CONTENT-TYPE': 'text/html; charset=utf-8'}
         self._output = output
 
     @property
     def headers(self):
+        #print self.headers
         L = [(_RESPONSE_HEADER_DICT.get(k, k), v) for k, v in self._headers.iteritems()]
         if hasattr(self, '_cookies'):
             for v in self._cookies.itervalues():
@@ -539,7 +541,7 @@ class Response(object):
             raise TypeError("Bad type of response code")
 
     def send(self, start_response):
-        start_response(self._status, self._headers)
+        start_response(self.status, self.headers)
         if isinstance(self._output, unicode):
             return self._output.encode("utf-8")
         return self._output
@@ -564,39 +566,31 @@ def handler_request(environ, start_response):
     try:
         request = Request(environ=environ, start_response=start_response)
     except Exception, e:
-        return handler_error(e)
+        return handler_error(exception=e)
     try:
         (re_url, url, callback), kwargs = find_matching_url(request)
         response = callback(request, **kwargs)
     except Exception, e:
-        return handler_request(e, request)
+        print e
+        return handler_error(e, request)
     if not isinstance(response, Response):
         response = Response(response)
     return response.send(start_response)
 
 
-def handler_error(exception, request=None):
-    if request is None:
-        request = {'_environ': {'PATH_INFO': ''}}
-    if not getattr(exception, 'hide_traceback', False):
-        (e_type, e_value, e_tb) = sys.exc_info()
-        message = "%s occured on '%s' \n Traceback: %s" % (
-            exception.__class__,
-            request._environ['PATH_INFO'],
-            exception,
-            ''.join(traceback.format_exception(e_type, e_value, e_tb))
-        )
-        request._environ['wsgi.input'].write(message)
-    status = ""
-    if isinstance(exception, HTTPError):
-        status = getattr(exception, 'status', '404 Not Found')
-        if status[:3] == '404':
-            return notfound()
-    return seemore(status)
+def handler_error(exception=None, request=None):
+    if not request:
+        pass
+    response = Response(output='404 Not Found', status='404 Not Found')
+    return response.send(request._start_response)
     # todo add error mapping
 
 
-def wsgiref_adapter(host="127.0.0.1", port=8888):
+def wsgiref_adapter(host, port):
     from wsgiref.simple_server import make_server
     srv = make_server(host, port, handler_request)
     srv.serve_forever()
+
+
+def runserver(host="127.0.0.1", port=8888, config=None):
+    wsgiref_adapter(host, port)
