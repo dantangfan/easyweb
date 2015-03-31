@@ -10,6 +10,7 @@ except Exception, e:
 
 @get('/')
 def index(request):
+    print type(request)
     return 'hello world !'
 
 
