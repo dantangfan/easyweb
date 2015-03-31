@@ -4,10 +4,8 @@
 
 import re
 import cgi
-import sys
 import os
 import urllib
-import traceback
 
 
 _RESPONSE_STATUSES = {
@@ -127,21 +125,10 @@ MEDIA_ROOT = os.path.join(os.path.dirname(__file__), 'media')
 
 class HTTPError(Exception):
     def __init__(self, code):
-        super(HTTPError, self).__init__()
+        super(HTTPError, self).__init__(code)
         self.status = "%s %s" % (code, _RESPONSE_STATUSES[code])
-
-    def header(self, name, value):
-        if not hasattr(self, "_headers"):
-            self._headers = [_HEADER_X_POWER_BY]
-        else:
-            self._headers.append((name, value))
-
-    @property
-    def headers(self):
-        if hasattr(self, '_headers'):
-            return self._headers
-        else:
-            return []
+        self.code = code
+        self.msg = _RESPONSE_STATUSES[code]
 
     def __str__(self):
         return self.status
@@ -152,7 +139,7 @@ class HTTPError(Exception):
 class RedirectError(HTTPError):
     def __init__(self, code, location):
         super(RedirectError, self).__init__(code)
-        self.location = location
+        self.msg = _RESPONSE_STATUSES[code] + ": " + location
 
     def __str__(self):
         return "%s %s" % (self.status, self.location)
@@ -169,11 +156,11 @@ def unauthorized():
 
 
 def forbidden():
-    return str(HTTPError(403))
+    return HTTPError(403)
 
 
 def notfound():
-    return str(HTTPError(404))
+    return HTTPError(404)
 
 
 def conflict():
@@ -185,7 +172,7 @@ def internalerror():
 
 
 def redirect(location):
-    return str(RedirectError(301, location))
+    return RedirectError(301, location)
 
 
 def found(location):
@@ -193,7 +180,7 @@ def found(location):
 
 
 def seemore(location):
-    return str(RedirectError(303, location))
+    return RedirectError(303, location)
 
 
 if type('') is type(b''):
@@ -248,7 +235,7 @@ else:
 def _quote(src, encoding="utf-8"):
     """
     quote src to string
-    :param url:
+    :param src:
     :return: str
     """
     if isinstance(src, unicode):
@@ -259,7 +246,7 @@ def _quote(src, encoding="utf-8"):
 def _unquote(src, encoding="utf-8"):
     """
     unquote str to url
-    :param url:
+    :param src:
     :param encoding:
     :return: unicode
     """
@@ -271,8 +258,9 @@ def get(url):
     decorator for get method
     register
     """
+    url = add_slash(url)
     def _decorator(func):
-        re_url = re.compile("^%s$" % add_slash(url))
+        re_url = re.compile("^%s$" % url)
         REQUEST_MAPPINGS['GET'].append((re_url, url, func))
         return func
     return _decorator
@@ -283,8 +271,9 @@ def post(url):
     decorator for post method
     register
     """
+    url = add_slash(url)
     def _decorator(func):
-        re_url = re.compile("^%s$" % add_slash(url))
+        re_url = re.compile("^%s$" % url)
         REQUEST_MAPPINGS['POST'].append((re_url, url, func))
         return func
     return _decorator
@@ -348,7 +337,7 @@ class Request(object):
             return r[0]
         return r
 
-    def gets(self,key):
+    def gets(self, key):
         r = self._get_raw_input()[key]
         if isinstance(r, list):
             return r[:]
@@ -399,7 +388,7 @@ class Request(object):
             hdrs = {}
             for k, v in self._environ.iteritems():
                 if k.startswith('HTTP_'):
-                    hdrs[k[5:].replace('_','-').upper()] = v.decode('utf-8')
+                    hdrs[k[5:].replace('_', '-').upper()] = v.decode('utf-8')
             self._headers = hdrs
         return self._headers
 
@@ -408,7 +397,7 @@ class Request(object):
         return Dict(**self._get_headers())
 
     def header(self, header, default=None):
-        return self._get_headers().get(header.upper(),default)
+        return self._get_headers().get(header.upper(), default)
 
     def _get_cookies(self):
         if not hasattr(self, "_cookies"):
@@ -452,20 +441,20 @@ class Response(object):
 
     def header(self, name):
         key = name.upper()
-        if not key in _RESPONSE_HEADER_DICT:
+        if key not in _RESPONSE_HEADER_DICT:
             key = name
         return self._headers.get(key)
 
     def unset_header(self, name):
         key = name.upper()
-        if not key in _RESPONSE_HEADER_DICT:
+        if key not in _RESPONSE_HEADER_DICT:
             key = name
         if key in self._headers:
             del self._headers[key]
 
     def set_header(self, name, value):
         key = name.upper()
-        if not key in _RESPONSE_HEADER_DICT:
+        if key not in _RESPONSE_HEADER_DICT:
             key = name
         self._headers[key] = _to_str(value)
 
@@ -482,7 +471,7 @@ class Response(object):
 
     @property
     def content_length(self):
-        self.header('CONTENT-LENGTH')
+        return self.header('CONTENT-LENGTH')
 
     @content_length.setter
     def content_length(self, value):
@@ -514,7 +503,6 @@ class Response(object):
     def clear_all_cookies(self):
         if hasattr(self, '_cookies'):
             for name in self._cookies:
-                print name
                 self.delete_cookie(name)
 
     @property
@@ -547,7 +535,7 @@ class Response(object):
                 value = value.encode('utf-8')
             if _RE_RESPONSE_STATUS.match(value):
                 self._status = value
-            raise ValueError("Bad response code: %s" %  value)
+            raise ValueError("Bad response code: %s" % value)
         else:
             raise TypeError("Bad type of response code")
 
@@ -563,45 +551,46 @@ def add_slash(url):
         url += '/'
     return url
 
+
 def find_matching_url(request):
-    if not request.request_method in REQUEST_MAPPINGS:
+    if request.request_method not in REQUEST_MAPPINGS:
         raise seemore("The HTTP request method '%s' is not supported." % request.request_method)
     for url_set in REQUEST_MAPPINGS[request.request_method]:
         match = url_set[0].search(request.path_info)
         if match is not None:
-            return (url_set, match.groupdict())
-    raise seemore("Sorry, nothing here")
+            return url_set, match.groupdict()
+    raise notfound()
 
 
-def handler_request(environ, start_response):
+def handle_request(environ, start_response):
     try:
         request = Request(environ=environ, start_response=start_response)
     except Exception, e:
-        return handler_error(exception=e)
+        return Response(e, "%s %s" % (500, _RESPONSE_STATUSES[500]))
     try:
         (re_url, url, callback), kwargs = find_matching_url(request)
         response = callback(request, **kwargs)
     except Exception, e:
-        print e
-        return handler_error(e, request)
+        return handle_error(e, request)
     if not isinstance(response, Response):
         response = Response(response)
     return response.send(start_response)
 
 
-def handler_error(exception=None, request=None):
-    if not request:
-        pass
-    response = Response(output='404 Not Found', status='404 Not Found')
+def handle_error(exception, request=None):
+    if isinstance(exception, HTTPError):
+        status = exception.status
+    else:
+        status = "500 Server Error"
+    response = Response(exception.msg, status)
     return response.send(request._start_response)
-    # todo add error mapping
 
 
 def wsgiref_adapter(host, port):
     from wsgiref.simple_server import make_server
-    srv = make_server(host, port, handler_request)
+    srv = make_server(host, port, handle_request)
     srv.serve_forever()
 
 
-def runserver(host="127.0.0.1", port=8888, config=None):
+def runserver(host="127.0.0.1", port=8888):
     wsgiref_adapter(host, port)
