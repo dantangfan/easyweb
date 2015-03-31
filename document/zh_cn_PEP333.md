@@ -1,3 +1,6 @@
+##写在前面
+PEP333的原文在[PEP333](https://www.python.org/dev/peps/pep-0333/)，这篇文章是对他的一个大体翻译，好多语句不知道怎么翻译就用自己的话说了。有些觉得不影响理解的东西就没有翻译直接跳过，因为看原文总是比看翻译好的。
+
 ##摘要
 本文档的主要目的是拟定web服务器和Python与web应用程序或框架之间的标准接口，来加强web应用程序在不同web服务器之间的可移植性。
 
@@ -38,7 +41,7 @@ WSGI接口有两种形式：一种针对服务器或gateway，另一种正对web
 
 在整篇文章中，我们使用的属于`可调用`的意思是一个函数、方法、类、或者一个包含`__call__`方法的实例。者依赖于服务器/框架根据自己所需要的技术来选择实现方式。但是，一个服务器/框架调用一个可调用程序的时候不能依赖调用程序的实现方式。可调用程序仅仅是用来调用的，而不是用来自省的（意思是可调用程序跟__call__方法没有关系，只是这里的一个术语）。
 
-##框架/应用程序端
+###框架/应用程序端
 
 应用程序对象是一个接收两个参数的可调用对象。这里的`对象`并不是一个真正的对象（python对象），一个函数、方法、类、或者一个包含`__call__`方法的实例可以用作应用程序对象。应用程序对象必须能被多次调用，因为几乎所有的服务器/gateway（除了CGI）都会重复的请求。
 
@@ -72,7 +75,7 @@ class AppClass:
         yield "Hello world !\n"
 ```
 
-##服务器/gateway端
+###服务器/gateway端
 
 每次收到从HTTP客户端来的请求服务器就会调用可调用的应用程序。下面是一个简单的CGI，是以接收一个应用程序对象的函数来实现的。这个例子并没有良好的出错处理，默认情况下未被捕获的错误会输出到`sys.stderr`并被服务器记录
 
@@ -138,7 +141,7 @@ def run_with_cgi(application):
             result.close()
 ```
 
-## 中间件
+### 中间件
 
 我们知道有些中间件又能当成服务器又能当成应用程序，这些中间件可以提供这样的一些功能
 - 根据目标url将请求传递到不同应用程序对象
@@ -249,7 +252,7 @@ run_with_cgi(Latinator(foo_app))
 
 最后，服务器不能直接调用应用程序返回的可迭代对象的其他任何属性，除非这个属性是针对服务器实现的特定实例。
 
-##environ变量
+###environ变量
 
 `environ`需要包含如下CGI定义的环境变量。下面的变量必须被呈现出来，除非他的值是空（这时候如果没有特别指出，空值会被忽略）。
 
@@ -279,7 +282,7 @@ run_with_cgi(Latinator(foo_app))
 
 最后 environ 字典也可以包含服务器定义的变量。这些变量的名字必须是小写字母、数字、点和下划线，并且应该带一个能唯一代表服务器的前缀。比如， mod_python可能会定义象这样的一些变量:`mod_python.some_variable`.
 
-##输入和错误流
+####输入和错误流
 
 输入和错误流必须支持如下方法
 
@@ -287,10 +290,123 @@ run_with_cgi(Latinator(foo_app))
 | --------   | -----:  | :----:  |
 |   read(size)  | input |  1     |
 |   readline()     | input     |   1,2  |
-|    readlines(int)    |  input      | 1,3   |
+|    readlines(hint)    |  input      | 1,3   |
 |__iter__()|input||
 |flush()|error|4|
 |write(str)|error||
 |writelines(seq)|error||
 
-1. 
+1. 服务器不需要通过读取客户端全部内容来计算Content-Length长度，但是如果应用程序试图这样做，就可以用这一点来模拟文件结束的条件。应用程序不应该读取长度大于Content-Length变量的数据。
+2. readline并不支持可选参数’size‘，因为它对于服务器开发者来实现有些复杂了，并且也不常使用
+3. 可选参数’hint‘对应用程序和服务器都是可有可无的
+4. 由于错误流可能无法倒回，服务器端可以无缓冲的转发写操作，flash()方法可以是空。应用程序就不行了，它不能认为flash()是个空操作也不能认为输出无缓冲。它们必须调用flash()来确保输出。
+
+符合本说明的服务器都必须支持上面这些方法，符合本说明的应用程序/框架不得使用input和errors对象的其他方法或属性。需要指出的是，应用程序不能试图关闭这些流，即便他们有close()方法。
+
+###start_response()
+
+这是应用程序/框架对象的第二个参数`start_response(status,response_headers,exc_info=None)`（**所有WSGI的可调用对象都只能用参数位置调用，不能用参数名称如add(a=1,b=2)是不行的**），`start_response`是用来开始一个HTTP响应的，而且它必须返回一个`write(body_data)`的可调用对象。
+
+`status`只能是`404 Not Found`这种格式的，不能有回车之类乱七八糟的。
+
+`response_headers`前面说过了，是`(header_name, header_value)`类型的元组(type(response_headers) is List)，内容可以由服务器修改但`header_name`必须符合HTTP标准。
+
+`header_value`不能包含任何控制字符。
+
+一般情况下，服务器需要保证送到客户端的HTTP头是正确的：如果应用程序省略了HTTP需要的头，服务器就要加上去。
+
+（注意：HTTP头的名字是大小写敏感的，在应用程序检查的时候要注意这个问题）
+
+`start_response`不能直接传输响应headers，它需要为服务器保存这些headers，直到应用程序返回值的第一个迭代对象yields一个非空字符串，或者应用程序第一次调用`write()`方法的时候，服务器才传输这些headers。换句话说，只有当body data可用时或者应用程序返回的可迭代对象耗尽时才传输这些headers，唯一的例外是头部Content-Length本身就为0(有这句话前面句简直废话还看不懂)。
+
+响应头的传输延迟是为了确保缓冲和异步应用程序能在请求结束前的任何时刻用error message代替原本的输出。例如，当在缓冲区内的body产生的时候出错，应用程序就要把响应码从“200 OK”改成“500 Internal Error”。
+
+`exc_info`一旦被提供的话，就必须是`sys.exc_info()`元组格式的。只有在`start_response`被error handler调用的时候，这个参数才需要被提供。如果有`exc_info`参数，并且还没有HTTP headers被输出，`start_response`就需要用新的HTTP response headers替换当前存储的HTTP response headers，从而使应用程序在出错的时候“改变主意”。
+
+但是如果`exc_info`被提供了，而且HTTP headers也被发送了，`start_response`就必须raise a error，也需要raise the exc_info
+tuple， 如下：
+```python
+raise exc_info[0], exc_info[1], exc_info[2]
+```
+
+这将重新抛出被应用程序捕获的异常，并且原则上要终止应用程序（在HTTP headers被发送之后还继续将错误信息发送到浏览器是不安全的）。如果使用了`exc_info`参数，应用程序不能捕获任何`start_response`抛出的异常。
+
+只有当`exc_info`被提供的时候，应用程序才有可能多次调用`start_response`。 （参见示例：CGI gateway 正确的逻辑的示意图。）
+
+注意：服务器或者中间件实现`start_response`的时候要确保在函数生命周期之后`exc_info`的值是空，要做到这一点最简单的办法是这样：
+```python
+def start_response(status, response_headers, exc_info=None):
+    if exc_info:
+         try:
+             # do stuff w/exc_info here
+         finally:
+             exc_info = None    # Avoid circular ref.
+```
+
+CGI gateway也提供了这个技术的示意图
+
+####处理Content-Length
+如果应用程序没有提供这个header，服务器就需要从多种处理办法中选一个处理，最简单的处理方式就是在响应结束时关闭客户端链接。
+
+有时候，服务器有可能可以自己添加一个Content-Length header，或者至少避免直接关闭连接。如果应用程序没有调用write()，并且返回的可迭代对象的len()是1，服务器就能自动的用可迭代对象yield的第一个字符串的长度当成Content-Length的长度。
+
+###Buffering and Streaming 
+
+###unicode问题
+
+HTTP和这里的接口都不会直接支持unicode，所有的编码解码问题都要应用程序来做：传递到服务器的字符串必须是`python byte string`而不是`unicode object`，如果格式不对，结果会是未定义。
+
+同时，传递给`start_response`的字符串必须`RFC 2616`编码，也就是说它必须是`ISO-8859-1`的字符串或者`RFC 2047 MIME`编码。
+
+本规范涉及到的所有string都是`str`或`StringType`，决不能是`unicode`或`unicodeType`的。即使当前平台支持多余8微的字符串，在本规范中的字符串也只能取低8位。
+
+
+###出错处理
+一般情况下，应用程序应该尽可能的捕获自己内部的错误，并且在浏览器中显示有用的信息。
+
+要显示这种信息，应用程序就必须还没有发送任何数据到浏览器，否则会破坏正常的响应。因此WSGI提供了一种机制，它允许应用程序发送错误信息，或终止响应：在`start_response`中给出`exc_info`参数，如下：
+```python
+try:
+    # regular application code here
+    status = "200 Froody"
+    response_headers = [("content-type", "text/plain")]
+    start_response(status, response_headers)
+    return ["normal body goes here"]
+except:
+    # XXX should trap runtime issues like MemoryError, KeyboardInterrupt
+    #     in a separate handler before this bare 'except:'...
+    status = "500 Oops"
+    response_headers = [("content-type", "text/plain")]
+    start_response(status, response_headers, sys.exc_info())
+    return ["error body goes here"]
+```
+
+如果发生异常的时候还没有任何数据被写入，那么`start_response`就会返回正常，应用程序也会返回一个出错body给浏览器。如果异常时已经有数据发送给浏览器，那么`start_response`就会重新抛出异常。这种异常不应该被应用程序捕获，这样应用程序才能被终止！服务器可以捕获这种（致命）的错误，然后终止响应。
+
+服务器需要捕获并且记录那些使应用程序或者应用程序返回的可迭代对象终止的异常，如果在异常之前已经有数据发送给浏览器，那么服务器将尝试添加一个error message浏览器，如果已经发送的数据中有`text/*`，服务器也知道该如何处理。
+
+有些中间件可能希望提供额外的出错处理服务，或者说拦截、替换应用程序产生的出错信息。这种情况下，中间件可以不用为`start_response`提供`exc_info`参数，而是抛出一个特定的额中间件异常，或者干脆存储提供参数之后无异常。这就让应用程序返回its error body iterable，并且允许中间件修改error output。只要开发人员尊需以下规则，这项技术就可以工作：
+1. 当发生一个error response的时候总是提供`exc_info`
+2. 当`exc_info`被提供的时候，绝对不要捕获`start_response`产生的异常。
+
+### HTTP 1.1 Expect/Continue
+### Other HTTP Features 
+
+### 线程支持
+
+是否支持线程，也取决于服务器。可并行运行多个请求的服务器也应该提供单线程运行应用程序的选项，如此一来，非线程安全的框架或者应用程序都能使用这个服务器。
+
+##实现
+
+### 服务器扩展API
+
+有些服务器作者肯呢个想给出更先进的API，这些API可以用于让框架作者处理专门的功能。例如，基于`mod_python`的gateway可能希望提供Apache 的一部分API作为WSGI的扩展。
+
+简单情况下，这种实现值需要在`environ`中添加特定的环境变量就行了，比如`mod_python.some_api`。但多数情况下，中间可能会带来困难。比如一个API可以访问一个特定的能在`environ`中找到的HTTP header，但是很有可能访问到的只是被中间件修改过后的值。
+
+一般情况下，扩展API和中间件的不兼容会带来风险，服务器开发者也不应该假设每人会使用中间件。
+
+为了提供最大程度额兼容，提供扩展API代替WSGIAPI的服务器必须把这些API设计成像被替代的那一部分API的调用方式那样调用。如果扩展API不能保证永远与`environ`中的HTTP header标志的内容一致，就必须拒绝应用程序跑在这个服务器上，比如说可以raise a error 或者返回 None。
+
+同样，如果扩展API提供了写响应数据或者headers的手段，就必须在应用程序得到扩展服务之前让`start_response`被传入。如果传入的对象和服务器原先给出的不一样，它就不能保证正确的操作，并且应该被终止。
+
