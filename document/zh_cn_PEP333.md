@@ -410,3 +410,111 @@ except:
 
 同样，如果扩展API提供了写响应数据或者headers的手段，就必须在应用程序得到扩展服务之前让`start_response`被传入。如果传入的对象和服务器原先给出的不一样，它就不能保证正确的操作，并且应该被终止。
 
+让服务器/中间件开发者遵循安全的可扩展API规定是很重要也很必要的！
+
+###应用配置
+
+这里并不是定义服务器如何去调用一个应用程序，因为这些选项有关服务器高级配置，需要服务器作者在文档中写明。
+
+同样，框架的作者也需要在文档中说明如何利用框架创建一个可执行的应用程序。用户必须自己把选择的框架和服务器结合在一起。尽管框架和服务器有共同的接口，但这仅仅是物理上的问题，比不影响每个框架/服务器的配对。
+
+有些应用程序、框架或中间件可能希望通过`environ`来获取简单的配置字符串，这时候服务器应该支持应用程序能向`environ`中加入键值对。简单情况下，这个过程只需要把`os.environ`所提供的环境变量加入到`environ`中。
+
+应用程序应该尽量把这种需求降到最低，因为并不是所有的服务器都支持简单配置。最坏情况下，部署人员可以提供一个简单的配置文件：
+```python
+from the_app import application
+
+def new_app(environ, start_response):
+    environ['the_app.configval1'] = 'something'
+    return application(environ, start_response)
+```
+
+大多数常见的框架都只需要一个`environ`的值来指定应用程序的配置文件地址（当然，应用程序应该cache这些配置，以避免每次调用都需要重新读取文件）。
+
+###URL重建
+
+如果一个应用程序希望重建完整的请求url，那么他可能需要下面的算法，contributed by Ian Bicking：
+```python
+from urllib import quote
+url = environ['wsgi.url_scheme']+'://'
+
+if environ.get('HTTP_HOST'):
+    url += environ['HTTP_HOST']
+else:
+    url += environ['SERVER_NAME']
+
+    if environ['wsgi.url_scheme'] == 'https':
+        if environ['SERVER_PORT'] != '443':
+           url += ':' + environ['SERVER_PORT']
+    else:
+        if environ['SERVER_PORT'] != '80':
+           url += ':' + environ['SERVER_PORT']
+
+url += quote(environ.get('SCRIPT_NAME', ''))
+url += quote(environ.get('PATH_INFO', ''))
+if environ.get('QUERY_STRING'):
+    url += '?' + environ['QUERY_STRING']
+```
+
+有时候重建的url可能跟浏览器请求的url不太一样，有可能是服务器重写url的规则把客户端请求的url修改成了服务器认为规范的形式，或者其他原因。
+
+### Supporting Older( < 2.2)Versions of Python
+
+### 特定平台文件处理
+
+有些操作环境提供高效的文件级传输设备，比如说Unix的`sendfile()`调用。服务器可以通过`environ`中配置`wsgi.file_wrapper`选项来揭露此功能。应用程序可以使用这个“file wrapper”来把file-like的对象转换为iterable再返回。
+```python
+if 'wsgi.file_wrapper' in environ:
+    return environ['wsgi.file_wrapper'](filelike, block_size)
+else:
+    return iter(lambda: filelike.read(block_size), '')
+```
+
+如果服务器支持`wsgi.file_wrapper`，那么他的值必须是一个可以接一个必填参数和一个可选参数的可调用对象。第一个参数是将要发送文件的对象，第二个是建议的block size（服务器中不需要使用）。这个可调用对象必须返回一个iterable object，而且只有在应用程序把这个iterable返回给服务器并且服务器收到的时候，它才可以传输数据。
+
+一个file-like对象必须有接收一个可选叫块大小的可选参数的read()方法，它也可以有close()方法有，一旦有close()方法，`wsgi.file_wrapper`对象就必须有一个可以调用file-like文件close()方法的close()方法。如果file-like对象有任何跟Python内置文件对象相同的方法或者属性（如fileon()），`wsgi.file_wrapper`可以假设这些方法和属性都是和内置的方法属性一样。
+
+特定平台文件处理的实际调用都必须在应用程序返回之后，由服务器检查是否返回了一个wrapper对象。
+
+跟处理`close()`不同的是，从应用程序返回一个file wrapper和返回iter(filelike.read,"")的语义是一样的。也就是说，传输开始时，起始位置应该是文件的当前位置，这个过程一直持续到结束。
+
+当然，特定平台的文件传输API并不会接收任意的file-like对象。因此一个`wsgi.file_wrapper`必须自省(检查)所提供的file-like对象以确定是否支持。
+
+需要注意的是，即便该file-like对象不支持对应平台的API，`wsgi.file_wrapper`也应该返回一个包含read()和close()的iterator，这样应用程序才是可移植的。就像下面这个例子：
+```python
+class FileWrapper:
+
+    def __init__(self, filelike, blksize=8192):
+        self.filelike = filelike
+        self.blksize = blksize
+        if hasattr(filelike, 'close'):
+            self.close = filelike.close
+
+    def __getitem__(self, key):
+        data = self.filelike.read(self.blksize)
+        if data:
+            return data
+        raise IndexError
+```
+
+这里是一个服务器利用上面方法来访问特定平台API的例子：
+```python
+environ['wsgi.file_wrapper'] = FileWrapper
+result = application(environ, start_response)
+
+try:
+    if isinstance(result, FileWrapper):
+        # check if result.filelike is usable w/platform-specific
+        # API, and if so, use that API to transmit the result.
+        # If not, fall through to normal iterable handling
+        # loop below.
+
+    for data in result:
+        # etc.
+
+finally:
+    if hasattr(result, 'close'):
+        result.close()
+```
+
+## Q & A
