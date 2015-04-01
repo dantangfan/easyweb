@@ -586,11 +586,16 @@ def handle_error(exception, request=None):
     return response.send(request._start_response)
 
 
+def easyserver_adapter(host, port):
+    from easyserver import make_server
+    srv = make_server(host, port, handle_request)
+    srv.serve_forever()
+
 def wsgiref_adapter(host, port):
     from wsgiref.simple_server import make_server
     srv = make_server(host, port, handle_request)
     srv.serve_forever()
 
-
 def runserver(host="127.0.0.1", port=8888):
     wsgiref_adapter(host, port)
+    #easyserver_adapter(host, port)
