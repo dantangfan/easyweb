@@ -5,10 +5,8 @@ import sys
 import types
 import urllib
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
-
-
-class Header(object):
-    pass
+# headers直接从wsgiref拿过来的
+from headers import Headers
 
 
 class EasyHandler(object):
@@ -70,7 +68,7 @@ class EasyHandler(object):
         elif self.headers is not None:
             raise AssertionError("headers already sent")
         self.status = status
-        self.headers = Header(headers)
+        self.headers = Headers(headers)
         return self.write
 
     def finish(self):
