@@ -3,6 +3,8 @@
 
 import sys
 import types
+import urllib
+from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 
 
 class Header(object):
@@ -94,6 +96,11 @@ class EasyHandler(object):
             pass
 
     def send_headers(self):
+        # 根据PEP333
+        # 如果应用程序没有提供content-length参数
+        # 我们就需要自己计算出他的长度
+        # 如果返回的可迭代对象长度是1,就直接使用第一个yield的字符串的长度当成最终值
+        # 或者可以在连接结束时关闭客户端
         if not self.headers.haskey('Content-Length'):
             try:
                 blocks = len(self.result)
@@ -102,6 +109,9 @@ class EasyHandler(object):
             else:
                 if blocks == 1:
                     self.headers['Content-Length'] = str(self.bytes_sent)
+                else:
+                    pass
+                    # todo
         self.headers_sent = True
         self._write('Status %s\r\n' % self.status)
         self._write(str(self.headers))
@@ -127,9 +137,13 @@ class EasyHandler(object):
 
     def close(self):
         try:
+            # 根据PEP333
+            # 如果迭代对象返回了close方法，不管这个请求如何，在请求完成时都必须调用这个方法
             if hasattr(self.result, 'close'):
                 self.result.close()
         finally:
+            # 每次处理完一个请求之后，需要重置各种变量
+            # 因为下次的请求环境变量是不一样的
             self.reset()
 
     def _write(self, data):
@@ -159,3 +173,85 @@ class EasyHandler(object):
         if self.environ.get("HTTPS") in ('yes', 'on', '1'):
             return 'https'
         return 'http'
+
+
+class WSGIServer(HTTPServer):
+    application = None
+
+    def server_bind(self):
+        HTTPServer.server_bind(self)
+        self.setup()
+
+    def setup(self):
+        env = {}
+
+    def get_app(self):
+        return self.application
+
+    def set_app(self, app):
+        self.application = app
+
+
+class WSGIRequestHandler(BaseHTTPRequestHandler):
+    def get_environ(self):
+        # 这个函数用于初始化EasyServer的时候，需要的环境变量
+        env = self.server.base_environ.copy()
+        env['SERVER_PROTOCOL'] = self.request_version  # 如HTTP/1.0
+        env['REQUEST_METHOD'] = self.command  # 获取GET/POST方法
+        if '?' in self.path:
+            path, query = self.path.split('?', 1)
+        else:
+            path, query = self.path, ''
+
+        env['PATH_INFO'] = urllib.unquote(path)  # 把%、空格之类的控制字符专码，这是为安全考虑
+        env['QUERY_STRING'] = query
+
+        host = self.address_string()
+        if host != self.client_address[0]:
+            env['REMOTE_HOST'] = host  # 这种形式：localhost
+        env['REMOTE_ADDR'] = self.client_address[0]  # 这种形式：127.0.0.1
+
+        if self.headers.typeheader is None:
+            env['CONTENT_TYPE'] = self.headers.type
+        else:
+            env['CONTENT_TYPE'] = self.headers.typeheader
+
+        # 这里PEP333中有说，如果请求中没有提供这个参数，就需要服务器自己处理
+        length = self.headers.getheader('content-length')
+        if length:
+            env['CONTENT_LENGTH'] = length
+
+        for h in self.headers.headers:
+            k, v = h.split(':', 1)
+            k = k.replace('-', '_').upper()
+            v = v.strip()
+            if k in env:
+                continue                    # 这里跳过content-length之类的前面已经单独处理过的
+            if 'HTTP_'+k in env:
+                env['HTTP_'+k] += ','+v     # 有时候有些头有多个值
+            else:
+                env['HTTP_'+k] = v
+        return env
+
+    def get_stderr(self):
+        return sys.stderr
+
+    def handle(self):
+        # 这里的rfile是一个可读文件
+        # 他在源文件中是这样定义的self.rfile = self.connection.makefile('rb', self.rbufsize)
+        self.raw_requestline = self.rfile.readline()
+        # 解析self.raw_requestline的数据，如果解析出错了就直接退出
+        if not self.parse_request():
+            return
+        handler = EasyHandler(
+            self.rfile,
+            self.wfile,
+            self.get_stderr(),
+            self.get_environ()
+        )
+        handler.run(self.server.get_app())
+
+def make_server(host, port, app, server_class=WSGIServer, handle_class=WSGIRequestHandler):
+    server = server_class((host, port), handle_class)
+    server.set_app(app)
+    return server

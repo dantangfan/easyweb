@@ -564,7 +564,7 @@ def find_matching_url(request):
 
 def handle_request(environ, start_response):
     try:
-        request = Request(environ=environ, start_response=start_response)
+        request = Request(environ, start_response)
     except Exception, e:
         return Response(e, "%s %s" % (500, _RESPONSE_STATUSES[500]))
     try:
