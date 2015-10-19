@@ -259,11 +259,12 @@ def get(url):
     register
     """
     url = add_slash(url)
-    def _decorator(func):
+
+    def _(func):
         re_url = re.compile("^%s$" % url)
         REQUEST_MAPPINGS['GET'].append((re_url, url, func))
         return func
-    return _decorator
+    return _
 
 
 def post(url):
@@ -272,11 +273,12 @@ def post(url):
     register
     """
     url = add_slash(url)
-    def _decorator(func):
+
+    def _(func):
         re_url = re.compile("^%s$" % url)
         REQUEST_MAPPINGS['POST'].append((re_url, url, func))
         return func
-    return _decorator
+    return _
 
 
 class MultipartFile(object):
@@ -586,15 +588,22 @@ def handle_error(exception, request=None):
     return response.send(request._start_response)
 
 
-def easyserver_adapter(host, port):
-    from easyserver import make_server
+def wsgi_easyserver_adapter(host, port):
+    from wsgi_easyserver import make_server
     srv = make_server(host, port, handle_request)
     srv.serve_forever()
+
 
 def wsgiref_adapter(host, port):
     from wsgiref.simple_server import make_server
     srv = make_server(host, port, handle_request)
     srv.serve_forever()
+
+
+def easyserver_adapter(host, port):
+    from easyserver import HTTPServer
+    pass
+
 
 def runserver(host="127.0.0.1", port=8888):
     wsgiref_adapter(host, port)
